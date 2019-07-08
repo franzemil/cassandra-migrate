@@ -54,11 +54,11 @@ VALUES (%s, %s, %s, %s, %s, %s, toTimestamp(now()))
 """
 
 FINALIZE_DB_VERSION = """
-UPDATE "{keyspace}"."{table}" SET state = %s WHERE id = %s IF state = %s
+UPDATE "{keyspace}"."{table}" SET state = %s WHERE id = %s
 """
 
 DELETE_DB_VERSION = """
-DELETE FROM "{keyspace}"."{table}" WHERE id = %s IF state = %s
+DELETE FROM "{keyspace}"."{table}" WHERE id = %s
 """
 
 
@@ -231,7 +231,6 @@ class Migrator(object):
 
     def _execute(self, query, *args, **kwargs):
         """Execute a query with the current session"""
-
         self.logger.debug('Executing query: {}'.format(query))
         return self.session.execute(query, *args, **kwargs)
 
@@ -332,12 +331,6 @@ class Migrator(object):
 
             last_version = version.version
 
-            # A migration is in progress.
-            if version.state == Migration.State.IN_PROGRESS:
-                if ignore_concurrent:
-                    break
-                raise ConcurrentMigration(version.version, version.name)
-
             # A stored version's migrations differs from the one in the FS.
             if version.content != migration.content or \
                version.name != migration.name or \
@@ -382,9 +375,6 @@ class Migrator(object):
             (version_id, version, migration.name, migration.content,
              bytearray(migration.checksum), Migration.State.IN_PROGRESS))
 
-        if not result or not result[0].applied:
-            raise ConcurrentMigration(version, migration.name)
-
         return version_id
 
     def _apply_cql_migration(self, version, migration):
@@ -407,7 +397,6 @@ class Migrator(object):
             for statement in statements:
                 self.session.execute(statement)
         except Exception:
-            self.logger.exception('Failed to execute migration')
             raise FailedMigration(version, migration.name)
 
     def _apply_python_migration(self, version, migration):
@@ -463,10 +452,7 @@ class Migrator(object):
                              'state {}'.format(new_state))
             result = self._execute(
                 self._q(FINALIZE_DB_VERSION),
-                (new_state, version_uuid, Migration.State.IN_PROGRESS))
-
-        if not result or not result[0].applied:
-            raise ConcurrentMigration(version, migration.name)
+                (new_state, version_uuid))
 
     def _cleanup_previous_versions(self, cur_versions):
         if not cur_versions:
@@ -483,10 +469,6 @@ class Migrator(object):
         result = self._execute(
             self._q(DELETE_DB_VERSION),
             (last_version.id, Migration.State.FAILED))
-
-        if not result[0].applied:
-            raise ConcurrentMigration(last_version.version,
-                                      last_version.name)
 
     def _advance(self, migrations, target, cur_versions, skip=False,
                  force=False):
